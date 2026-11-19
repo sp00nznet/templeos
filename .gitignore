@@ -1,0 +1,7 @@
+work/
+src/gen/
+build*/
+*.ISO
+*.iso
+build.log
+__pycache__/
