@@ -12,7 +12,7 @@ find_package(SDL2 REQUIRED)
 
 add_executable(templeos
   runtime/main.c runtime/machine.c runtime/tasks.c runtime/devices.c
-  runtime/present.c runtime/dispatch.c src/gen/dispatch.c ${KERNEL_GEN})
+  runtime/present.c runtime/dispatch.c runtime/capture.c runtime/blobs.c src/gen/dispatch.c ${KERNEL_GEN})
 target_include_directories(templeos PRIVATE runtime src/gen ${PCRECOMP_DIR}/runtime/recomp64_cpu)
 target_compile_definitions(templeos PRIVATE RECOMP64_BASED RECOMP64_MMIO RECOMP64_SYSTEM)
 if(TARGET SDL2::SDL2)

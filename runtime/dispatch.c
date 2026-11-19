@@ -30,7 +30,7 @@ const char *sym_near(uint64_t a, uint64_t *off)
 {
     size_t lo = 0, hi = g_nsyms;
     while (lo < hi) { size_t m = (lo + hi) / 2; if (g_syms[m].a <= a) lo = m + 1; else hi = m; }
-    if (!lo || a >= K_IMAGE_END) { *off = a; return "?"; }
+    if (!lo || a - g_syms[lo - 1].a > 0x10000) { *off = a; return "?"; }
     *off = a - g_syms[lo - 1].a;
     return g_syms[lo - 1].n;
 }
@@ -63,23 +63,46 @@ void dispatch_miss(CPU *c, uint64_t a)
     uint64_t off; const char *s = sym_near(a, &off);
     fprintf(stderr, "no lifted code for %#llx (%s+%#llx), called from near %#llx\n",
             (unsigned long long)a, s, (unsigned long long)off, (unsigned long long)c->rip);
-    if (a >= 0x7C00 && a < K_IMAGE_END) {
-        char p[1024]; snprintf(p, sizeof p, "%s/seeds-kernel.txt", g_work);
+    if ((a >= 0x7C00 && a < K_IMAGE_END) || mods_find(a) >= 0) {
+        char p[1024]; snprintf(p, sizeof p, "%s/seeds.txt", g_work);
         FILE *f = fopen(p, "a");
         if (f) { fprintf(f, "0x%llX  # %s+%#llx\n", (unsigned long long)a, s, (unsigned long long)off); fclose(f); }
         fprintf(stderr, "recorded in %s; run tools/gen.py again\n", p);
         fflush(stderr);
         _Exit(20);
     }
-    fprintf(stderr, "(outside the kernel: code made at run time, not yet captured)\n");
+    if (capture_module(a)) { fflush(stderr); _Exit(22); }
+    if (blob_known(a)) {                     /* a new entry into a block already lifted */
+        char p[1024]; snprintf(p, sizeof p, "%s/seeds.txt", g_work);
+        FILE *f = fopen(p, "a");
+        if (f) { fprintf(f, "0x%llX  # compiler output\n", (unsigned long long)a); fclose(f); }
+        fflush(stderr);
+        _Exit(20);
+    }
+    fprintf(stderr, "(code made at run time that was never captured: new code, not run)\n");
     fflush(stderr);
     _Exit(21);
 }
 
+int mods_unverified(void);
+uint64_t g_trace_fn = ~0ull;
 void dispatch(CPU *c, uint64_t a)
 {
     lifted_fn f = lookup(a);
+    if (!f) f = blob_lookup(a);
+    if (!f && a >= K_IMAGE_END && mods_find(a) < 0 && !module_at(a)) f = blob_resolve(c, a);
     if (!f) dispatch_miss(c, a);
+    if (a >= K_IMAGE_END && mods_unverified()) mods_find(a);
+    if (a == g_trace_fn) {                    /* TEMPLE_TRACE_FN=<hex>: log calls to one function */
+        uint64_t a1 = rd64(c->rsp + 8), off;
+        char s[48] = {0};
+        for (int i = 0; i < 40 && a1 > 0x1000 && a1 < GUEST_RAM && rd8(a1 + i) >= 32 && rd8(a1 + i) < 127; i++) s[i] = (char)rd8(a1 + i);
+        fprintf(stderr, "[call %s] args %#llx %#llx %#llx \"%s\"", sym_near(a, &off), (unsigned long long)a1,
+                (unsigned long long)rd64(c->rsp + 16), (unsigned long long)rd64(c->rsp + 24), s);
+        f(c);
+        fprintf(stderr, " -> %#llx\n", (unsigned long long)c->rax);
+        return;
+    }
     f(c);
 }
 

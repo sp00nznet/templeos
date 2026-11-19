@@ -134,11 +134,11 @@ void tasks_iret(CPU *c, uint64_t rip)
  * entry, which lands here; _RET is a bare RET, done by hand. */
 void hook_yield(CPU *c)
 {
-    extern void L_YIELD_BODY(CPU *);
+    extern lifted_fn g_body__YIELD;
     jmp_buf jb;
     int p = add_point(K_RET, c->rsp, &jb);
     if (setjmp(jb) == 0) {
-        L_YIELD_BODY(c);                   /* single-user mode returns normally */
+        g_body__YIELD(c);                   /* single-user mode returns normally */
         if (pts[p].used && pts[p].jb == &jb) drop_point(p);
         return;
     }

@@ -22,15 +22,15 @@ def switch_targets(img, base, hist, jmp):
     The table holds 1/2/4-byte offsets from BASE (the end of the JMP); the
     bound comes from the nearest CMP idx,N before it."""
     if len(hist) < 2:
-        return []
+        return [], True
     ld, add = hist[-2], hist[-1]
     if add.mnemonic != 'add' or ld.mnemonic not in ('movsx', 'movzx', 'mov', 'movsxd'):
-        return []
+        return [], True
     if len(add.operands) != 2 or add.operands[1].type != X86_OP_IMM:
-        return []
+        return [], True
     m = ld.operands[1]
     if m.type != X86_OP_MEM or not m.mem.index and not m.mem.base:
-        return []
+        return [], True
     width, table, signed = m.size, m.mem.disp, ld.mnemonic != 'movzx'
     bas = add.operands[1].imm & 0xFFFFFFFF
     idxreg = m.mem.index or m.mem.base
@@ -39,39 +39,47 @@ def switch_targets(img, base, hist, jmp):
         if h.mnemonic == 'cmp' and len(h.operands) == 2 and h.operands[1].type == X86_OP_IMM                 and h.operands[0].type == 2 and md.reg_name(h.operands[0].reg)[-2:] == md.reg_name(idxreg)[-2:]:
             n = h.operands[1].imm + 1
             break
-    if n is None or not (0 < n <= 4096):
-        return []
+    bounded = n is not None
+    if not bounded:
+        n = 256       # `switch [x]` has no bounds check: read while the arms stay in the function
+    if not (0 < n <= 4096):
+        return [], True
     out = []
     for k in range(n):
         o = table - base + k * width
         if o < 0 or o + width > len(img):
             break
-        v = int.from_bytes(img[o:o + width], 'little', signed=signed)
-        out.append((bas + v) & 0xFFFFFFFF)
-    return out
+        t = (bas + int.from_bytes(img[o:o + width], 'little', signed=signed)) & 0xFFFFFFFF
+        if not bounded and not (jmp.address < t < table):
+            break
+        out.append(t)
+    return out, bounded
 
 
 def walk(img, base, entry, skip_targets, entries=frozenset()):
     """Reachable instructions of the function at `entry`: (end, calls, bad)."""
-    seen, work, calls = set(), [entry], set()
+    seen, work, calls = set(), [(entry, False)], set()
     hist = []
     end = entry
     lo, hi = base, base + len(img)
     while work:
-        a = work.pop()
+        a, spec = work.pop()
         hist = []
         while lo <= a < hi and a not in seen:
             try:
                 ins = next(md.disasm(img[a - base:a - base + 16], a), None)
             except Exception:
                 ins = None
-            if ins is None:
+            if ins is None or ins.mnemonic == '(bad)':
+                if spec:          # an arm of an unbounded switch table that was not one
+                    break
                 return None
             seen.add(a)
             end = max(end, a + ins.size)
             mn = ins.mnemonic
             if mn == 'jmp' and ins.operands and ins.operands[0].type == 1:   # jmp reg
-                work.extend(t for t in switch_targets(img, base, hist, ins) if lo <= t < hi)
+                tg, bounded = switch_targets(img, base, hist, ins)
+                work.extend((t, not bounded) for t in tg if lo <= t < hi)
             hist = (hist + [ins])[-12:]
             if mn in ('(bad)',):
                 return None
@@ -94,7 +102,7 @@ def walk(img, base, entry, skip_targets, entries=frozenset()):
                 if (t in entries and t != entry) or t < entry:
                     calls.add(t)          # a tail jump to another function
                 elif lo <= t < hi:
-                    work.append(t)
+                    work.append((t, spec))
                 if mn == 'jmp':
                     break
             if mn.split()[-1] in STOP and mn != 'jmp' or mn == 'jmp':
@@ -114,7 +122,7 @@ def discover(img, base, seeds, skip_targets, names):
             bad.append(f)
             continue
         end, calls, seen = r
-        funcs[f] = (end - f, names.get(f, 'sub_%X' % f))
+        funcs[f] = (end - f, names.get(f, 'sub_%X' % f), seen)
         todo.extend(c for c in calls if c not in funcs)
     return funcs, bad
 

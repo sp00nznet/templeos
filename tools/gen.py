@@ -11,7 +11,7 @@ pcrecomp's lift64_sys, and writes src/gen/:
   ksyms.h       the kernel's exports and boot constants, for runtime/main.c
 Nothing from the ISO is copied into the repository; src/gen/ is ignored.
 """
-import os, sys, struct
+import os, re, sys, struct
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
@@ -20,7 +20,7 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 
 BASE = 0x7C00
 CHUNK = 80
-HOOKS = {'_YIELD': 'hook_yield'}
+HOOKS = {'_YIELD': 'hook_yield', '_FREE': 'hook_free'}
 
 
 def kernel_from_iso(iso):
@@ -72,65 +72,137 @@ def main():
     raw = kernel_from_iso(iso)
     img, ex, imports = tosbin.relocate(raw, BASE)
     consts = boot_constants(img, ex)
-    mb = BASE + tosbin.HDR
-    skip = {mb + off - 1 for et, off, name in imports}
-    names = {v: k for k, v in ex.items() if isinstance(v, int)}
-    seeds = {consts['KSTART64']}
-    for k, v in ex.items():
-        if isinstance(v, int) and BASE <= v < BASE + len(img) and img[v - BASE:v - BASE + 4] == b'\x55\x48\x8b\xec':
-            seeds.add(v)
-    sf = os.path.join(ROOT, 'work', 'seeds-kernel.txt')
+    seeds_all = []
+    sf = os.path.join(ROOT, 'work', 'seeds.txt')
     if os.path.exists(sf):
         for line in open(sf):
             line = line.split('#')[0].strip()
             if line:
-                seeds.add(int(line.split()[0], 0))
-    funcs, bad = discover.discover(img, BASE, seeds, skip, names)
-    if bad:
-        print('undecodable seeds:', ' '.join('%X' % b for b in bad))
+                seeds_all.append(int(line.split()[0], 0))
+
+    # Regions: the kernel, then every module captured at run time (work/jit).
+    regions = [dict(tag='kernel', base=BASE, img=img, ex=ex, imports=imports,
+                    extra={consts['KSTART64']}, fnv=None)]
+    idx = os.path.join(ROOT, 'work', 'jit', 'index.txt')
+    if os.path.exists(idx):
+        for line in open(idx):
+            p = line.split()
+            if len(p) == 3 and p[0] == 'mod':
+                mbase = int(p[1], 16)
+                mimg = open(os.path.join(ROOT, 'work', 'jit', 'mod_%X.bin' % mbase), 'rb').read()
+                mex, mimp, mains = module_symbols(mimg, mbase)
+                regions.append(dict(tag='mod_%X' % mbase, base=mbase, img=mimg, ex=mex, imports=mimp,
+                                    extra=set(mains), fnv=fnv(mimg)))
+            elif len(p) == 4 and p[0] == 'blob':
+                bbase, bsize, bfnv = int(p[1], 16), int(p[2], 16), int(p[3], 16)
+                bimg = open(os.path.join(ROOT, 'work', 'jit', 'blob_%X_%016X.bin' % (bbase, bfnv)), 'rb').read()
+                if any(r.get('blob') == (bbase, bfnv) for r in regions):
+                    continue
+                regions.append(dict(tag='blob_%X_%08X' % (bbase, bfnv & 0xFFFFFFFF), base=bbase, img=bimg, ex={},
+                                    imports=[], extra={bbase}, fnv=None, blob=(bbase, bfnv)))
 
     gen = os.path.join(ROOT, 'src', 'gen')
     os.makedirs(gen, exist_ok=True)
-    for f in os.listdir(gen):
-        if f.startswith('kernel_') and f.endswith('.c'):
-            os.remove(os.path.join(gen, f))
-    addrs = sorted(funcs)
-    nfiles = 0
-    for n in range(0, len(addrs), CHUNK):
-        part = {a: funcs[a] for a in addrs[n:n + CHUNK]}
-        lift64_sys.lift_raw(img, BASE, part, os.path.join(gen, 'kernel_%02d.c' % nfiles), header='temple_lift.h', dyn_calls=skip)
-        nfiles += 1
+    allfuncs, allsyms, files = {}, [], []
+    for r in regions:
+        base, rimg, rex = r['base'], r['img'], r['ex']
+        mb = base + tosbin.HDR
+        dyn = {mb + off - 1 for et, off, name in r['imports'] if et == 8}
+        names = {v: k for k, v in rex.items() if isinstance(v, int)}
+        seeds = set(r['extra'])
+        for k, v in rex.items():
+            if isinstance(v, int) and base <= v < base + len(rimg) and rimg[v - base:v - base + 4] == b'\x55\x48\x8b\xec':
+                seeds.add(v)
+        seeds |= {a for a in seeds_all if base <= a < base + len(rimg)}
+        funcs, bad = discover.discover(rimg, base, seeds, dyn, names)
+        buckets = {}
+        for a in funcs:
+            buckets.setdefault((a - base) // 0x4000, {})[a] = funcs[a]
+        for b, part in sorted(buckets.items()):
+            fn = '%s_%02d.c' % (r['tag'], b)
+            tmp = os.path.join(gen, fn + '.tmp')
+            lift64_sys.lift_raw(rimg, base, part, tmp, header='temple_lift.h', dyn_calls=dyn,
+                                dyn_all='blob' in r)
+            text = open(tmp).read()
+            if 'blob' in r:     # variants share addresses: give their functions their own names
+                pre = 'B%08X_' % (r['blob'][1] & 0xFFFFFFFF)
+                text = re.sub(r'^void L_([0-9A-F]{12})\(CPU \*c\)', 'void ' + pre + r'\1(CPU *c)', text, flags=re.M)
+            write_if_changed(os.path.join(gen, fn), text)
+            os.remove(tmp)
+            files.append('src/gen/' + fn)
+        if 'blob' in r:
+            r['funcs'] = sorted(funcs)
+        else:
+            allfuncs.update(funcs)
+        allsyms += [(v, k) for k, v in rex.items() if isinstance(v, int) and base <= v < base + len(rimg)]
+        print('%s: %d functions at %#x%s' % (r['tag'], len(funcs), base,
+              ', undecodable seeds ' + ' '.join('%X' % x for x in bad[:8]) if bad else ''))
 
-    hooked = {ex[k]: v for k, v in HOOKS.items()}
-    with open(os.path.join(gen, 'dispatch.c'), 'w') as f:
-        f.write('/* generated by tools/gen.py - do not edit */\n#include "temple_lift.h"\n#include <stddef.h>\n\n')
-        for a in addrs:
-            f.write('void L_%012X(CPU *c);\n' % a)
-        for h in sorted(set(hooked.values())):
-            f.write('void %s(CPU *c);\n' % h)
-        f.write('void L_YIELD_BODY(CPU *c) { L_%012X(c); }\n\n' % ex['_YIELD'])
-        f.write('typedef struct { uint64_t a; void (*fn)(CPU *); } Ent;\n')
-        f.write('const Ent g_lifted[] = {\n')
-        for a in addrs:
-            f.write('  {0x%Xull, %s},\n' % (a, hooked.get(a, 'L_%012X' % a)))
-        f.write('};\nconst size_t g_nlifted = %d;\n\n' % len(addrs))
-        syms = sorted((v, k) for k, v in ex.items() if isinstance(v, int) and BASE <= v < BASE + len(img))
-        f.write('typedef struct { uint64_t a; const char *n; } Sym;\nconst Sym g_syms[] = {\n')
-        for v, k in syms:
-            f.write('  {0x%Xull, "%s"},\n' % (v, k))
-        f.write('};\nconst size_t g_nsyms = %d;\n' % len(syms))
-    with open(os.path.join(gen, 'ksyms.h'), 'w') as f:
-        f.write('/* generated by tools/gen.py - do not edit */\n#pragma once\n')
-        f.write('#define K_IMAGE_FNV 0x%016Xull\n' % fnv(raw))
-        f.write('#define K_IMAGE_END 0x%Xull\n' % (BASE + len(img)))
-        for k, v in sorted(consts.items()):
-            f.write('#define K_%s 0x%Xull\n' % (k, v))
-        for k, v in sorted(ex.items()):
-            if isinstance(v, int) and k.isidentifier():
-                f.write('#define K_%s 0x%Xull\n' % (k, v))
-    with open(os.path.join(gen, 'kernel_files.cmake'), 'w') as f:
-        f.write('set(KERNEL_GEN %s)\n' % ' '.join('src/gen/kernel_%02d.c' % i for i in range(nfiles)))
-    print('%d functions in %d files, %d exports; KStart64 at %#x' % (len(addrs), nfiles, len(ex), consts['KSTART64']))
+    addrs = sorted(allfuncs)
+    out = ['/* generated by tools/gen.py - do not edit */\n#include "temple_lift.h"\n#include <stddef.h>\n\n']
+    out += ['void L_%012X(CPU *c);\n' % a for a in addrs]
+    out += ['void %s(CPU *c);\n' % h for h in sorted(set(HOOKS.values()))]
+    # Hooks: the dispatch table sends these to runtime wrappers, which call
+    # the lifted body through g_body_<name>.
+    allex = {}
+    for r in regions:
+        allex.update({k: v for k, v in r['ex'].items() if isinstance(v, int)})
+    out.append('typedef void (*lifted_fn)(CPU *);\n')
+    for name in sorted(HOOKS):
+        out.append('lifted_fn g_body_%s = %s;\n' % (name, 'L_%012X' % allex[name] if allex.get(name) in allfuncs else '0'))
+    hooked = {allex[k]: v for k, v in HOOKS.items() if allex.get(k) in allfuncs}
+    blobs = [r for r in regions if 'blob' in r]
+    for i, r in enumerate(blobs):
+        pre = 'B%08X_' % (r['blob'][1] & 0xFFFFFFFF)
+        out += ['void %s%012X(CPU *c);\n' % (pre, a) for a in r['funcs']]
+        out.append('static const struct { uint64_t a; lifted_fn fn; } be_%d[] = {\n' % i)
+        out += ['  {0x%Xull, %s%012X},\n' % (a, pre, a) for a in r['funcs']]
+        out.append('};\n')
+    out.append('typedef struct { uint64_t addr, size, fnv; const void *ents; size_t nents; } Blob;\nconst Blob g_blobs[] = {\n')
+    out += ['  {0x%Xull, 0x%Xull, 0x%016Xull, be_%d, %d},\n' % (r['base'], len(r['img']), r['blob'][1], i, len(r['funcs']))
+            for i, r in enumerate(blobs)]
+    out.append('  {0, 0, 0, 0, 0}\n};\nconst size_t g_nblobs = %d;\n\n' % len(blobs))
+    out.append('typedef struct { uint64_t a; void (*fn)(CPU *); } Ent;\nconst Ent g_lifted[] = {\n')
+    out += ['  {0x%Xull, %s},\n' % (a, hooked.get(a, 'L_%012X' % a)) for a in addrs]
+    out.append('};\nconst size_t g_nlifted = %d;\n\n' % len(addrs))
+    syms = sorted(set(allsyms))
+    out.append('typedef struct { uint64_t a; const char *n; } Sym;\nconst Sym g_syms[] = {\n')
+    out += ['  {0x%Xull, "%s"},\n' % (v, k) for v, k in syms]
+    out.append('};\nconst size_t g_nsyms = %d;\n\n' % len(syms))
+    mods = [r for r in regions if r['fnv'] is not None]
+    out.append('typedef struct { uint64_t base, size, fnv; } Mod;\nconst Mod g_mods[] = {\n')
+    out += ['  {0x%Xull, 0x%Xull, 0x%016Xull},\n' % (r['base'], len(r['img']), r['fnv']) for r in mods]
+    out.append('  {0, 0, 0}\n};\nconst size_t g_nmods = %d;\n' % len(mods))
+    write_if_changed(os.path.join(gen, 'dispatch.c'), ''.join(out))
+    k = ['/* generated by tools/gen.py - do not edit */\n#pragma once\n',
+         '#define K_IMAGE_FNV 0x%016Xull\n' % fnv(raw), '#define K_IMAGE_END 0x%Xull\n' % (BASE + len(img))]
+    k += ['#define K_%s 0x%Xull\n' % (n, v) for n, v in sorted(consts.items())]
+    k += ['#define K_%s 0x%Xull\n' % (n, v) for n, v in sorted(ex.items()) if isinstance(v, int) and n.isidentifier()]
+    write_if_changed(os.path.join(gen, 'ksyms.h'), ''.join(k))
+    for f in os.listdir(gen):
+        if f.endswith('.c') and f != 'dispatch.c' and 'src/gen/' + f not in files:
+            os.remove(os.path.join(gen, f))
+    write_if_changed(os.path.join(gen, 'kernel_files.cmake'), 'set(KERNEL_GEN %s)\n' % ' '.join(files))
+    print('%d functions in %d files; KStart64 at %#x' % (len(addrs), len(files), consts['KSTART64']))
+
+
+def module_symbols(mimg, mbase):
+    """Exports, imports and IET_MAIN entries of a module image captured from memory."""
+    mb = mbase + tosbin.HDR
+    ex, imports, mains, last = {}, [], [], ''
+    for et, i, name, extra in tosbin.entries(mimg):
+        if et in (16, 18): ex[name] = mb + i
+        elif et == 25: mains.append(mb + i)
+        elif 2 <= et <= 11:
+            if name: last = name
+            imports.append((et, i, last))
+    return ex, imports, mains
+
+
+def write_if_changed(path, text):
+    if os.path.exists(path) and open(path).read() == text:
+        return
+    open(path, 'w').write(text)
 
 
 if __name__ == '__main__':

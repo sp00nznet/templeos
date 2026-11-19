@@ -72,6 +72,7 @@ static int boot(const uint8_t *iso, size_t iso_n)
     w32(K_SYS_BOOT_SRC, 4 | shift << 16);           /* BOOT_SRC_DVD, kernel's offset in its block */
     w32(K_SYS_BOOT_BLK, blk);
     w32(K_MEM_BOOT_BASE, (uint32_t)mb);
+    w32(K_SYS_BOOT_PATCH_TABLE_BASE, (uint32_t)(mb + pt - 32));   /* LoadKernel reads the exports here */
     w16(K_MEM_E801, 15 * 1024);                      /* KB between 1 and 16 MB */
     w16(K_MEM_E801 + 2, (uint16_t)((GUEST_RAM - 0x1000000) >> 16));
     uint64_t e = K_MEM_E820;                         /* CMemE820: base, len, type */
@@ -133,6 +134,7 @@ int main(int argc, char **argv)
     size_t iso_n; uint8_t *iso = read_file(iso_path, &iso_n);
     if (!iso || !iso_open(iso_path)) { fprintf(stderr, "cannot read %s\n", iso_path); return 2; }
 
+    { extern uint64_t g_trace_fn; const char *t = getenv("TEMPLE_TRACE_FN"); if (t) g_trace_fn = strtoull(t, NULL, 16); }
     SDL_SetMainReady();
     mem_init();
     machine_init();

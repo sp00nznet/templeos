@@ -31,6 +31,12 @@ lifted_fn lookup(uint64_t a);
 const char *sym_near(uint64_t a, uint64_t *off);
 void dispatch_miss(CPU *c, uint64_t a);
 void guest_backtrace(CPU *c);
+int mods_find(uint64_t a);
+int capture_module(uint64_t a);
+int module_at(uint64_t a);
+lifted_fn blob_lookup(uint64_t a);
+lifted_fn blob_resolve(CPU *c, uint64_t a);
+int blob_known(uint64_t a);
 
 /* machine.c */
 void machine_init(void);
