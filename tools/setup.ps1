@@ -61,6 +61,9 @@ $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.e
 if (-not (Test-Path $vswhere) -or -not (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
   Fail "Visual Studio 2022 (or Build Tools) with 'Desktop development with C++' is needed."
 }
+if (-not (Test-Path $Toolkit) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+  & git clone -b temple https://github.com/sp00nznet/pcrecomp.git $Toolkit
+}
 if (-not (Test-Path (Join-Path $Toolkit 'tools\lift\lift64_sys.py'))) {
   Fail "pcrecomp's 'temple' branch was not found at $Toolkit (set PCRECOMP to its folder)."
 }

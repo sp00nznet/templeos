@@ -9,6 +9,7 @@ set -e
 cd "$(dirname "$0")"
 ISO=${1:-work/TempleOS.ISO}
 PCR=${PCRECOMP:-../pcrecomp-temple}
+[ -d "$PCR" ] || git clone -b temple https://github.com/sp00nznet/pcrecomp.git "$PCR" || true
 [ -f "$PCR/tools/lift/lift64_sys.py" ] || { echo "pcrecomp 'temple' branch not found at $PCR (set PCRECOMP)"; exit 1; }
 python3 -c 'import capstone' 2>/dev/null || { echo "python3 -m pip install capstone"; exit 1; }
 mkdir -p work

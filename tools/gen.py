@@ -66,7 +66,7 @@ def boot_constants(img, ex):
 
 def main():
     iso = open(sys.argv[1], 'rb').read()
-    pcr = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(ROOT), 'pcrecomp-temple')
+    pcr = sys.argv[2] if len(sys.argv) > 2 else os.environ.get('PCRECOMP') or os.path.join(os.path.dirname(ROOT), 'pcrecomp-temple')
     sys.path.insert(0, os.path.join(pcr, 'tools', 'lift'))
     import lift64_sys
 
