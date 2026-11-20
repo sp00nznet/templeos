@@ -11,11 +11,17 @@ more than a decade. This project takes the system exactly as he shipped it in
 its final release, V5.03, and translates its machine code to C so that it can
 keep running on modern machines.
 
-![TempleOS's kernel booting in a window, lifted to C](docs/screenshots/first-light.png)
+![The Adam desktop of TempleOS V5.03, running lifted to C](docs/screenshots/desktop.png)
 
-*The lifted kernel's first screen: KMain's boot text, the CD found through the
-emulated ATAPI drive, and the compiler about to load. The same screen from the
-Linux build is in `docs/screenshots/linux-first-light.png`.*
+*The Adam desktop after StartOS: the boot questions answered from the keyboard
+and `Dir;` run at the shell. Every instruction on screen is TempleOS's own code,
+translated ahead of time; the boot screen it starts from is in
+`docs/screenshots/first-light.png`.*
+
+![Squirt, from TempleOS's Demo/Games folder](docs/screenshots/squirt.png)
+
+*Squirt, one of the games that ship on the disc, compiled by TempleOS's own
+HolyC compiler at run time and running from its lifted output.*
 
 ## Credit
 
@@ -59,10 +65,10 @@ the reasoning is in [docs/survey.md](docs/survey.md).
 | ISO read (RedSea, TempleOS compression) | done |
 | Kernel lifted and booting: KMain, memory, interrupts, timer, drive detection | done - boot text on screen |
 | `Load("Compiler")`: the HolyC compiler, captured and lifted | done - verified byte for byte on Windows and Linux |
-| StartOS: the compiler's output, captured and lifted as it boots | in progress - compiling the kernel and compiler headers, lifted |
-| Adam, the window manager, the shell | next |
-| Keyboard, mouse, editor, a demo or game from the disc | planned |
-| Sound (PC speaker) | planned (muted for now) |
+| StartOS: the compiler's output, captured and lifted as it boots | done - about 1,100 distinct blocks |
+| Adam, the window manager, the shell | done - the desktop in 16 colours; commands typed at the shell run |
+| Keyboard, mouse, a demo or game from the disc | keyboard done; Squirt from Demo/Games runs; mouse packets scripted (`mouse:` events) |
+| Sound (PC speaker) | square wave with `--sound` (off by default, never in hidden runs) |
 | Builds | Windows (MSVC, Visual Studio 2022) and Linux (gcc, tested on Debian under WSL); macOS through the same CMake, not yet built |
 
 ## Getting started
@@ -70,7 +76,8 @@ the reasoning is in [docs/survey.md](docs/survey.md).
 You need TempleOS V5.03's `TempleOS.ISO`, Python 3.10+ with `capstone`
 (`pip install capstone`), CMake, a C compiler and SDL2, and a checkout of
 pcrecomp's `temple` branch next to this folder (`../pcrecomp-temple`, or set
-`PCRECOMP`).
+`PCRECOMP`). The setup scripts clone that branch there when it is missing; until
+it is published, check it out by hand.
 
 **Windows:** double-click `Setup.cmd`. It checks the tools, asks for the ISO,
 lifts, builds the capture cache (hidden, muted runs), and leaves
@@ -85,8 +92,10 @@ By hand:
     python tools/capture.py TempleOS.ISO                   # lift, build, run hidden, repeat
     build/Release/templeos TempleOS.ISO                    # then run it
 
-Options: `--hidden` (no window), `--shot out.png SECONDS`, `--quit SECONDS`,
-`--trace`. `TEMPLE_TRACE_FN=<hex address>` logs calls to one guest function.
+Options: `--hidden` (no window), `--sound` (the PC speaker), `--shot out.png SECONDS`,
+`--frames DIR START EVERY` (numbered PNGs), `--quit SECONDS`, `--keys TEXT SECONDS`
+(types TEXT, `
+` is Enter; `mouse:DX,DY,BUTTONS` moves or clicks), `--trace`. `TEMPLE_TRACE_FN=<hex address>` logs calls to one guest function.
 
 ## Layout
 

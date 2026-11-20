@@ -61,6 +61,7 @@ int  iso_open(const char *path);
 int  present_init(int hidden);
 void present_frame(void);
 int  present_png(const char *path);
+void present_mouse(int dx, int dy, int buttons);
 void present_poll(void);
 void vga_planes_latch(int new_mask);
 extern uint8_t g_vga_pal[16][3];

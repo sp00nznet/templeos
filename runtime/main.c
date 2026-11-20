@@ -122,15 +122,17 @@ static int boot(const uint8_t *iso, size_t iso_n)
 int main(int argc, char **argv)
 {
     const char *iso_path = NULL, *shot = NULL;
+    const char *frames = NULL; double frames_at = 0, frames_every = 0.1; int nframes = 0;
     int hidden = 0, sound = 0; double shot_at = 10, quit_at = 0;
-    const char *keys[8]; double keys_at[8]; int nkeys = 0, keys_done = 0;
+    const char *keys[32]; double keys_at[32]; int nkeys = 0, keys_done = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hidden")) hidden = 1;
         else if (!strcmp(argv[i], "--sound")) sound = 1;
         else if (!strcmp(argv[i], "--trace")) g_trace++;
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shot = argv[++i]; shot_at = atof(argv[++i]); }
+        else if (!strcmp(argv[i], "--frames") && i + 3 < argc) { frames = argv[++i]; frames_at = atof(argv[++i]); frames_every = atof(argv[++i]); }
         else if (!strcmp(argv[i], "--quit") && i + 1 < argc) quit_at = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--keys") && i + 2 < argc && nkeys < 8) { keys[nkeys] = argv[++i]; keys_at[nkeys++] = atof(argv[++i]); }
+        else if (!strcmp(argv[i], "--keys") && i + 2 < argc && nkeys < 32) { keys[nkeys] = argv[++i]; keys_at[nkeys++] = atof(argv[++i]); }
         else if (!strcmp(argv[i], "--work") && i + 1 < argc) g_work = argv[++i];
         else iso_path = argv[i];
     }
@@ -161,8 +163,14 @@ int main(int argc, char **argv)
             for (const char *p = keys[keys_done]; *p && n < sizeof buf - 1; p++)
                 if (p[0] == 92 && p[1] == 'n') { buf[n++] = 10; p++; } else buf[n++] = *p;
             buf[n] = 0;
-            present_type(buf);
+            int dx, dy, b;                            /* "mouse:DX,DY,BUTTONS" moves/clicks */
+            if (sscanf(buf, "mouse:%d,%d,%d", &dx, &dy, &b) == 3) present_mouse(dx, dy, b);
+            else present_type(buf);
             keys_done++;
+        }
+        if (frames && secs >= frames_at) {           /* --frames DIR START EVERY: numbered PNGs */
+            char fn[1024]; snprintf(fn, sizeof fn, "%s/f%04d.png", frames, nframes++);
+            present_png(fn); frames_at += frames_every;
         }
         if (quit_at && secs >= quit_at) break;
         SDL_Delay(1);

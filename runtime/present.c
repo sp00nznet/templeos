@@ -201,7 +201,7 @@ static void key(SDL_Scancode s, int up)
 /* A PS/2 mouse packet: buttons and signed 9-bit deltas, y up. */
 static void mouse(int dx, int dy, int dz, uint32_t buttons)
 {
-    while (dx || dy || dz) {
+    do {
         int x = dx > 255 ? 255 : dx < -255 ? -255 : dx, y = dy > 255 ? 255 : dy < -255 ? -255 : dy;
         int z = dz > 7 ? 7 : dz < -8 ? -8 : dz;
         dx -= x; dy -= y; dz -= z;
@@ -210,7 +210,13 @@ static void mouse(int dx, int dy, int dz, uint32_t buttons)
                                    | (buttons & SDL_BUTTON_MMASK ? 4 : 0) | (x < 0 ? 0x10 : 0) | (y < 0 ? 0x20 : 0)),
                         (uint8_t)x, (uint8_t)y, (uint8_t)(z & 0x0F)};
         input_bytes(p, 4, 1);
-    }
+    } while (dx || dy || dz);
+}
+
+/* Scripted mouse for hidden runs: buttons bit 0 left, bit 1 right. */
+void present_mouse(int dx, int dy, int buttons)
+{
+    mouse(dx, dy, 0, (buttons & 1 ? SDL_BUTTON_LMASK : 0) | (buttons & 2 ? SDL_BUTTON_RMASK : 0));
 }
 
 void present_poll(void)
