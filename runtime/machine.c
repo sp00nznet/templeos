@@ -54,7 +54,9 @@ uintptr_t mmio_addr(uint64_t a, int size, int write)
     }
     fprintf(stderr, "guest access outside its memory: %#llx (rip %#llx)\n",
             (unsigned long long)a, (unsigned long long)g_cpu.rip);
-    exit(4);
+    guest_backtrace(&g_cpu);
+    fflush(stderr);
+    _Exit(4);
 }
 
 uint64_t host_ns(void)
@@ -219,9 +221,14 @@ void sys_iret(CPU *c)
 
 void sys_int(CPU *c, int vec, uint64_t ret)
 {
-    fprintf(stderr, "int %#x at %#llx (software interrupt)\n", vec, (unsigned long long)c->rip);
+    extern void stop_shot(void);
+    fprintf(stderr, "int %#x at %#llx (software interrupt): rax %#llx rbx %#llx rcx %#llx\n", vec,
+            (unsigned long long)c->rip, (unsigned long long)c->rax, (unsigned long long)c->rbx, (unsigned long long)c->rcx);
+    guest_backtrace(c);
+    stop_shot();
     (void)ret;
-    exit(8);
+    fflush(stderr);
+    _Exit(8);
 }
 
 void sys_ret_mismatch(CPU *c, uint64_t expected)

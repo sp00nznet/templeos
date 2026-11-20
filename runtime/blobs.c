@@ -66,6 +66,43 @@ static int heap_block(uint64_t a, uint64_t *start, uint64_t *size)
     return 0;
 }
 
+/* Every block COCCompile returned, so a capture can take them all. */
+static struct { uint64_t a, n; int live; } made[1 << 16];
+static int nmade;
+
+static int known(uint64_t a, uint64_t h)
+{
+    for (size_t i = 0; i < g_nblobs; i++) if (g_blobs[i].addr == a && g_blobs[i].fnv == h) return 1;
+    return 0;
+}
+
+static void save_block(uint64_t st, uint64_t sz, uint64_t h)
+{
+    char dir[1024], p[1200];
+    snprintf(dir, sizeof dir, "%s/jit", g_work); mkdir_(dir);
+    snprintf(p, sizeof p, "%s/blob_%llX_%016llX.bin", dir, (unsigned long long)st, (unsigned long long)h);
+    FILE *f = fopen(p, "wb");
+    if (f) { fwrite(gptr(st), 1, sz, f); fclose(f); }
+    snprintf(p, sizeof p, "%s/index.txt", dir);
+    f = fopen(p, "a");
+    if (f) { fprintf(f, "blob 0x%llX 0x%llX 0x%016llX%c", (unsigned long long)st, (unsigned long long)sz, (unsigned long long)h, 10); fclose(f); }
+}
+
+/* COCCompile(cc, _code_size, _dbg, _type), wrapped: note the block it made. */
+void hook_coccompile(CPU *c)
+{
+    extern lifted_fn g_body_COCCompile;
+    uint64_t psize = rd64(c->rsp + 16);
+    g_body_COCCompile(c);
+    uint64_t res = c->rax, st, sz;
+    if (res && heap_block(res, &st, &sz) && st == res && nmade < (1 << 16)) {
+        made[nmade].a = st; made[nmade].n = psize ? rd64(psize) : sz; made[nmade].live = 1;
+        if (made[nmade].n > sz) made[nmade].n = sz;
+        made[nmade].n = sz;
+        nmade++;
+    }
+}
+
 /* Called on a dispatch miss outside the kernel and the captured modules. */
 lifted_fn blob_resolve(CPU *c, uint64_t a)
 {
@@ -81,18 +118,19 @@ lifted_fn blob_resolve(CPU *c, uint64_t a)
             if (f) return f;
             return NULL;                                   /* a new entry into a known block */
         }
-    /* New compiler output: write it down for lifting. */
-    char dir[1024], p[1200];
-    snprintf(dir, sizeof dir, "%s/jit", g_work); mkdir_(dir);
-    snprintf(p, sizeof p, "%s/blob_%llX_%016llX.bin", dir, (unsigned long long)st, (unsigned long long)h);
-    FILE *f = fopen(p, "wb");
-    if (f) { fwrite(gptr(st), 1, sz, f); fclose(f); }
-    snprintf(p, sizeof p, "%s/index.txt", dir);
-    f = fopen(p, "a");
-    if (f) { fprintf(f, "blob 0x%llX 0x%llX 0x%016llX\n", (unsigned long long)st, (unsigned long long)sz, (unsigned long long)h); fclose(f); }
-    fprintf(stderr, "captured compiler output at %#llx (%llu bytes); run tools/gen.py again\n",
-            (unsigned long long)st, (unsigned long long)sz);
+    /* New compiler output: write it down for lifting, together with every
+     * other block the compiler has produced that is not lifted yet, so one
+     * stop captures a whole batch. */
+    save_block(st, sz, h);
+    for (int i = 0; i < nmade; i++)
+        if (made[i].live && !(made[i].a == st)) {
+            uint64_t hh = fnv_mem(made[i].a, made[i].n);
+            if (!known(made[i].a, hh)) save_block(made[i].a, made[i].n, hh);
+        }
+    fprintf(stderr, "captured compiler output at %#llx (%llu bytes)%s; run tools/gen.py again\n",
+            (unsigned long long)st, (unsigned long long)sz, nmade ? " and the blocks compiled before it" : "");
     (void)c;
+    { extern void stop_shot(void); stop_shot(); }
     fflush(stderr);
     _Exit(22);
 }
@@ -102,6 +140,7 @@ void hook_free(CPU *c)
 {
     extern lifted_fn g_body__FREE;
     uint64_t p = rd64(c->rsp + 8);
+    for (int i = nmade - 1; i >= 0; i--) if (made[i].a == p) { made[i].live = 0; break; }
     if (p >= act_lo && p < act_hi) {
         uint64_t sz = rd64(p - 8) - 16;
         for (size_t i = 0; i < (1u << OVB); i++)

@@ -124,9 +124,103 @@ int present_png(const char *path)
     return 1;
 }
 
+/* SDL scancode -> PC scancode set 1 (what the i8042 delivers with
+ * translation on). 0xE0xx are the extended keys. */
+static uint16_t set1(SDL_Scancode s)
+{
+    static const uint8_t az[26] = {0x1E,0x30,0x2E,0x20,0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26,0x32,
+                                   0x31,0x18,0x19,0x10,0x13,0x1F,0x14,0x16,0x2F,0x11,0x2D,0x15,0x2C};
+    if (s >= SDL_SCANCODE_A && s <= SDL_SCANCODE_Z) return az[s - SDL_SCANCODE_A];
+    if (s >= SDL_SCANCODE_1 && s <= SDL_SCANCODE_0) return (uint16_t)(0x02 + (s - SDL_SCANCODE_1));
+    if (s >= SDL_SCANCODE_F1 && s <= SDL_SCANCODE_F10) return (uint16_t)(0x3B + (s - SDL_SCANCODE_F1));
+    switch (s) {
+    case SDL_SCANCODE_RETURN: return 0x1C;      case SDL_SCANCODE_ESCAPE: return 0x01;
+    case SDL_SCANCODE_BACKSPACE: return 0x0E;   case SDL_SCANCODE_TAB: return 0x0F;
+    case SDL_SCANCODE_SPACE: return 0x39;       case SDL_SCANCODE_MINUS: return 0x0C;
+    case SDL_SCANCODE_EQUALS: return 0x0D;      case SDL_SCANCODE_LEFTBRACKET: return 0x1A;
+    case SDL_SCANCODE_RIGHTBRACKET: return 0x1B; case SDL_SCANCODE_BACKSLASH: return 0x2B;
+    case SDL_SCANCODE_SEMICOLON: return 0x27;   case SDL_SCANCODE_APOSTROPHE: return 0x28;
+    case SDL_SCANCODE_GRAVE: return 0x29;       case SDL_SCANCODE_COMMA: return 0x33;
+    case SDL_SCANCODE_PERIOD: return 0x34;      case SDL_SCANCODE_SLASH: return 0x35;
+    case SDL_SCANCODE_CAPSLOCK: return 0x3A;    case SDL_SCANCODE_F11: return 0x57;
+    case SDL_SCANCODE_F12: return 0x58;         case SDL_SCANCODE_LSHIFT: return 0x2A;
+    case SDL_SCANCODE_RSHIFT: return 0x36;      case SDL_SCANCODE_LCTRL: return 0x1D;
+    case SDL_SCANCODE_LALT: return 0x38;        case SDL_SCANCODE_RCTRL: return 0xE01D;
+    case SDL_SCANCODE_RALT: return 0xE038;      case SDL_SCANCODE_UP: return 0xE048;
+    case SDL_SCANCODE_DOWN: return 0xE050;      case SDL_SCANCODE_LEFT: return 0xE04B;
+    case SDL_SCANCODE_RIGHT: return 0xE04D;     case SDL_SCANCODE_HOME: return 0xE047;
+    case SDL_SCANCODE_END: return 0xE04F;       case SDL_SCANCODE_PAGEUP: return 0xE049;
+    case SDL_SCANCODE_PAGEDOWN: return 0xE051;  case SDL_SCANCODE_INSERT: return 0xE052;
+    case SDL_SCANCODE_DELETE: return 0xE053;    case SDL_SCANCODE_LGUI: return 0xE05B;
+    default: return 0;
+    }
+}
+
+void input_bytes(const uint8_t *b, int n, int aux);   /* devices.c */
+
+static void key(SDL_Scancode s, int up)
+{
+    uint16_t k = set1(s);
+    if (!k) return;
+    uint8_t b[2]; int n = 0;
+    if (k >> 8) b[n++] = 0xE0;
+    b[n++] = (uint8_t)((k & 0x7F) | (up ? 0x80 : 0));
+    input_bytes(b, n, 0);
+}
+
+/* A PS/2 mouse packet: buttons and signed 9-bit deltas, y up. */
+static void mouse(int dx, int dy, int dz, uint32_t buttons)
+{
+    while (dx || dy || dz) {
+        int x = dx > 255 ? 255 : dx < -255 ? -255 : dx, y = dy > 255 ? 255 : dy < -255 ? -255 : dy;
+        int z = dz > 7 ? 7 : dz < -8 ? -8 : dz;
+        dx -= x; dy -= y; dz -= z;
+        y = -y;
+        uint8_t p[4] = {(uint8_t)(0x08 | (buttons & SDL_BUTTON_LMASK ? 1 : 0) | (buttons & SDL_BUTTON_RMASK ? 2 : 0)
+                                   | (buttons & SDL_BUTTON_MMASK ? 4 : 0) | (x < 0 ? 0x10 : 0) | (y < 0 ? 0x20 : 0)),
+                        (uint8_t)x, (uint8_t)y, (uint8_t)(z & 0x0F)};
+        input_bytes(p, 4, 1);
+    }
+}
+
 void present_poll(void)
 {
     SDL_Event e;
-    while (SDL_PollEvent(&e))
-        if (e.type == SDL_QUIT) g_quit = 1;
+    while (SDL_PollEvent(&e)) {
+        switch (e.type) {
+        case SDL_QUIT: g_quit = 1; break;
+        case SDL_KEYDOWN: case SDL_KEYUP: key(e.key.keysym.scancode, e.type == SDL_KEYUP); break;
+        case SDL_MOUSEMOTION: mouse(e.motion.xrel, e.motion.yrel, 0, e.motion.state); break;
+        case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: { uint32_t b = SDL_GetMouseState(NULL, NULL); uint8_t p[4] = {(uint8_t)(0x08 | (b & 1 ? 1 : 0) | (b & 4 ? 2 : 0) | (b & 2 ? 4 : 0)), 0, 0, 0}; input_bytes(p, 4, 1); break; }
+        case SDL_MOUSEWHEEL: mouse(0, 0, -e.wheel.y, SDL_GetMouseState(NULL, NULL)); break;
+        }
+    }
+}
+
+/* Scripted input for hidden test runs: "--keys TEXT@SECONDS" types TEXT. */
+void present_type(const char *text)
+{
+    for (const char *p = text; *p; p++) {
+        char ch = *p;
+        int shift = (ch >= 'A' && ch <= 'Z') || strchr("!@#$%^&*()_+{}|:\"<>?~", ch) != NULL;
+        static const char *lo = "`1234567890-=[]\\;',./", *hi = "~!@#$%^&*()_+{}|:\"<>?";
+        const char *q = strchr(hi, ch);
+        if (q && ch) ch = lo[q - hi];
+        SDL_Scancode s = SDL_SCANCODE_UNKNOWN;
+        if (ch >= 'a' && ch <= 'z') s = (SDL_Scancode)(SDL_SCANCODE_A + (ch - 'a'));
+        else if (ch >= 'A' && ch <= 'Z') s = (SDL_Scancode)(SDL_SCANCODE_A + (ch - 'A'));
+        else if (ch >= '1' && ch <= '9') s = (SDL_Scancode)(SDL_SCANCODE_1 + (ch - '1'));
+        else if (ch == '0') s = SDL_SCANCODE_0;
+        else if (ch == ' ') s = SDL_SCANCODE_SPACE;
+        else if (ch == '\n') s = SDL_SCANCODE_RETURN;
+        else if (ch == '\t') s = SDL_SCANCODE_TAB;
+        else { static const char *sy = "-=[]\\;',./`"; static const SDL_Scancode sc[] = {SDL_SCANCODE_MINUS, SDL_SCANCODE_EQUALS,
+                 SDL_SCANCODE_LEFTBRACKET, SDL_SCANCODE_RIGHTBRACKET, SDL_SCANCODE_BACKSLASH, SDL_SCANCODE_SEMICOLON,
+                 SDL_SCANCODE_APOSTROPHE, SDL_SCANCODE_COMMA, SDL_SCANCODE_PERIOD, SDL_SCANCODE_SLASH, SDL_SCANCODE_GRAVE};
+               const char *r = strchr(sy, ch); if (r && ch) s = sc[r - sy]; }
+        if (s == SDL_SCANCODE_UNKNOWN) continue;
+        if (shift) key(SDL_SCANCODE_LSHIFT, 0);
+        key(s, 0); key(s, 1);
+        if (shift) key(SDL_SCANCODE_LSHIFT, 1);
+    }
 }

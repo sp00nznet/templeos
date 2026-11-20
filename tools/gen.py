@@ -20,7 +20,7 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 
 BASE = 0x7C00
 CHUNK = 80
-HOOKS = {'_YIELD': 'hook_yield', '_FREE': 'hook_free'}
+HOOKS = {'_YIELD': 'hook_yield', '_FREE': 'hook_free', 'COCCompile': 'hook_coccompile'}
 
 
 def kernel_from_iso(iso):

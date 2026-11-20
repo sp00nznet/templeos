@@ -135,6 +135,7 @@ static void kbc_irq(void)
 /* Host side (main thread): queue input bytes for the guest. */
 void input_bytes(const uint8_t *b, int n, int aux)
 {
+    if (aux && n == 4 && mouse_id != 3) n = 3;    /* no wheel byte unless the guest enabled it */
     SDL_LockMutex(in_lock);
     for (int i = 0; i < n; i++) { hostq[hqt] = b[i]; hostqa[hqt] = aux; hqt = (hqt + 1) % 1024; }
     SDL_UnlockMutex(in_lock);

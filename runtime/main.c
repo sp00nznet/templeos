@@ -13,6 +13,7 @@
 #include <string.h>
 
 void devices_init(void);
+void present_type(const char *text);
 uint64_t K_RET = K__RET;
 const char *g_work = "work";
 
@@ -122,11 +123,13 @@ int main(int argc, char **argv)
 {
     const char *iso_path = NULL, *shot = NULL;
     int hidden = 0; double shot_at = 10, quit_at = 0;
+    const char *keys[8]; double keys_at[8]; int nkeys = 0, keys_done = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hidden")) hidden = 1;
         else if (!strcmp(argv[i], "--trace")) g_trace++;
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shot = argv[++i]; shot_at = atof(argv[++i]); }
         else if (!strcmp(argv[i], "--quit") && i + 1 < argc) quit_at = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--keys") && i + 2 < argc && nkeys < 8) { keys[nkeys] = argv[++i]; keys_at[nkeys++] = atof(argv[++i]); }
         else if (!strcmp(argv[i], "--work") && i + 1 < argc) g_work = argv[++i];
         else iso_path = argv[i];
     }
@@ -151,6 +154,14 @@ int main(int argc, char **argv)
         g_irq_pending = 1;                            /* the timer: guest polls take it from here */
         if (now - last_frame > 16000000ull) { present_poll(); present_frame(); last_frame = now; }
         if (shot && !shot_done && secs >= shot_at) { present_png(shot); shot_done = 1; fprintf(stderr, "[shot] %s at %.1fs\n", shot, secs); }
+        if (keys_done < nkeys && secs >= keys_at[keys_done]) {
+            char buf[1024]; size_t n = 0;            /* "\n" in the argument is Enter */
+            for (const char *p = keys[keys_done]; *p && n < sizeof buf - 1; p++)
+                if (p[0] == 92 && p[1] == 'n') { buf[n++] = 10; p++; } else buf[n++] = *p;
+            buf[n] = 0;
+            present_type(buf);
+            keys_done++;
+        }
         if (quit_at && secs >= quit_at) break;
         SDL_Delay(1);
     }

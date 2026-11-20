@@ -10,7 +10,7 @@ Writes funcs.txt for lift64_sys: "0xADDR 0xSIZE name".
 """
 import sys, os, struct
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_OP_REG, X86_REG_RIP
 
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
@@ -35,9 +35,14 @@ def switch_targets(img, base, hist, jmp):
     bas = add.operands[1].imm & 0xFFFFFFFF
     idxreg = m.mem.index or m.mem.base
     n = None
-    for h in reversed(hist[:-2]):
-        if h.mnemonic == 'cmp' and len(h.operands) == 2 and h.operands[1].type == X86_OP_IMM                 and h.operands[0].type == 2 and md.reg_name(h.operands[0].reg)[-2:] == md.reg_name(idxreg)[-2:]:
-            n = h.operands[1].imm + 1
+    for k in range(len(hist) - 3, -1, -1):
+        h = hist[k]
+        if h.mnemonic == 'cmp' and len(h.operands) == 2 and h.operands[1].type == X86_OP_IMM \
+                and h.operands[0].type == X86_OP_REG \
+                and md.reg_name(h.operands[0].reg)[-2:] == md.reg_name(idxreg)[-2:]:
+            jcc = hist[k + 1].mnemonic if k + 1 < len(hist) else ''
+            # `jae default`/`jb table` leave 0..N-1; `ja default`/`jbe table` leave 0..N.
+            n = h.operands[1].imm + (0 if jcc in ('jae', 'jnb', 'jnc', 'jb', 'jc', 'jnae', 'jge', 'jnl', 'jl', 'jnge') else 1)
             break
     bounded = n is not None
     if not bounded:
@@ -50,20 +55,31 @@ def switch_targets(img, base, hist, jmp):
         if o < 0 or o + width > len(img):
             break
         t = (bas + int.from_bytes(img[o:o + width], 'little', signed=signed)) & 0xFFFFFFFF
-        if not bounded and not (jmp.address < t < table):
-            break
+        if not bounded and not (jmp.address - 0x10000 < t < table):
+            continue      # not an arm of this function; each kept arm must still decode cleanly
         out.append(t)
     return out, bounded
 
 
 def walk(img, base, entry, skip_targets, entries=frozenset()):
     """Reachable instructions of the function at `entry`: (end, calls, bad)."""
-    seen, work, calls = set(), [(entry, False)], set()
+    seen, work, calls = set(), [(entry, 0)], set()
+    opaque = False
     hist = []
     end = entry
     lo, hi = base, base + len(img)
+    owner = {}                    # byte -> start of the instruction covering it
     while work:
-        a, spec = work.pop()
+        # Certain code first, then arms of bounded tables, then arms of
+        # unbounded ones; arms in table order, where the real entries come
+        # first. An arm that lands inside an instruction already decoded is
+        # not an arm.
+        cls = min(w[1] for w in work)
+        # Arms (classes 1, 2) in table order; everything an arm reaches (class
+        # 0.5, 1.5) depth first, before the table's next entry.
+        k = (min(i for i, w in enumerate(work) if w[1] == cls) if cls in (1, 2)
+             else max(i for i, w in enumerate(work) if w[1] == cls))
+        a, spec = work.pop(k)
         hist = []
         while lo <= a < hi and a not in seen:
             try:
@@ -74,12 +90,19 @@ def walk(img, base, entry, skip_targets, entries=frozenset()):
                 if spec:          # an arm of an unbounded switch table that was not one
                     break
                 return None
+            if any(owner.get(b, a) != a for b in range(a, a + ins.size)):
+                if spec:          # lands inside a real instruction: not an arm
+                    break
+            for b in range(a, a + ins.size):
+                owner.setdefault(b, a)
             seen.add(a)
             end = max(end, a + ins.size)
             mn = ins.mnemonic
             if mn == 'jmp' and ins.operands and ins.operands[0].type == 1:   # jmp reg
                 tg, bounded = switch_targets(img, base, hist, ins)
-                work.extend((t, not bounded) for t in tg if lo <= t < hi)
+                if not tg:
+                    opaque = True     # an indirect jump we cannot read: lift by linear sweep
+                work.extend((t, 1 if bounded else 2) for t in tg if lo <= t < hi and (bounded or t > entry))
             hist = (hist + [ins])[-12:]
             if mn in ('(bad)',):
                 return None
@@ -99,16 +122,18 @@ def walk(img, base, entry, skip_targets, entries=frozenset()):
             if (mn.startswith('j') or mn.startswith('loop')) and ins.operands \
                     and ins.operands[0].type == X86_OP_IMM:
                 t = ins.operands[0].imm
-                if (t in entries and t != entry) or t < entry:
+                if not (lo <= t < hi):
+                    pass                  # outside the image: not code we can lift
+                elif (t in entries and t != entry) or t < entry:
                     calls.add(t)          # a tail jump to another function
                 elif lo <= t < hi:
-                    work.append((t, spec))
+                    work.append((t, spec - 0.5 if spec in (1, 2) else spec))
                 if mn == 'jmp':
                     break
             if mn.split()[-1] in STOP and mn != 'jmp' or mn == 'jmp':
                 break
             a += ins.size
-    return end, calls, seen
+    return end, calls, (None if opaque else seen)
 
 
 def discover(img, base, seeds, skip_targets, names):

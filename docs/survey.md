@@ -122,27 +122,41 @@ The rule is strict: guest bytes are never executed, and guest instructions are
 never interpreted or emulated. Everything that runs is C produced by pcrecomp's
 lifter. That leaves two ways to deal with the JIT.
 
-**(a) An ahead-of-time cache of the JIT (chosen).** Lift the kernel and the
-compiler. Run the boot under the lift; when lifted code calls an address no
-lifted function covers, stop, name it, and record it. For an address in the
-kernel that is a function discovery missed (`work/seeds-kernel.txt`, lifted on
-the next `tools/gen.py`). For an address in the code heap it is compiler
-output: the runtime knows every block `COCCompile` returned (address, size),
-so it dumps the block's bytes (`work/jit/<addr>.bin`); the tools lift those
-blocks as further modules, keyed by address *and* content hash, and the next run
-dispatches to them when the same bytes appear at the same address. New code -
-something typed at the command line that was never seen - stops the run with a
-clear message instead of running anything unlifted.
+**(a) An ahead-of-time cache of the JIT (chosen).** Lift the kernel. Run the
+boot under the lift; when lifted code reaches an address no lifted function
+covers, stop, name it, and record it:
 
-This depends on the boot being deterministic: the same allocations in the same
-order, so the same code lands at the same address. Timer interrupts can preempt
-TempleOS tasks (`IRQ_TIMER` saves the running task), so interrupt timing from the
-host clock would make the heap layout differ run to run. The plan is a virtual
-clock for the cache-building runs (PIT, HPET and TSC derived from a count of
-safe points, not the host), which makes the boot repeatable. Call sites that a
-loader patches later are lifted to read their rel32 from guest memory at run
-time, so a block lifted before its imports resolved still calls the right
-function afterwards.
+- in the kernel or a captured module: a function discovery missed
+  (`work/seeds.txt`, lifted by the next `tools/gen.py`);
+- inside a `.BIN` module TempleOS loaded itself (a `TOSB` header around the
+  address - `Compiler.BIN`): the module's bytes as they are in memory,
+  relocated and linked (`work/jit/mod_<addr>.bin`). It is verified byte for
+  byte (FNV-1a) the first time it is entered on later runs;
+- inside a code-heap block (found from TempleOS's own heap header,
+  `CMemUsed {hc, size}` with the heap control's `HcSV` signature): compiler
+  output. Lifted blocks are keyed by (address, content hash); the first time
+  lifted code reaches a block its hash picks the variant and activates its
+  entry points. A hooked `_FREE` deactivates a block's entries, so different
+  code later at the same address never reaches stale lifted code. A hooked
+  `COCCompile` remembers every block compiled, so one stop captures all the
+  functions compiled so far, not just the one that was called;
+- anything else is new code: the run stops and says so.
+
+Call sites a loader patches later (imports of symbols defined after a module
+loads; in compiler output, every rel32 call) are lifted to read their target
+from guest memory at run time, so code lifted before its imports resolved
+still calls the right function afterwards.
+
+The cost is rounds: each new top-level statement StartOS compiles and runs is
+a new block, so building the cache takes many lift-build-run rounds
+(`tools/capture.py` automates them). It also depends on the boot laying out
+the heap the same way each time. Tasks switch only cooperatively during boot
+(`IRQ_TIMER` re-enters the scheduler but resumes the same task while it is
+ready), which keeps the layout stable in practice; a virtual clock (PIT, HPET
+and TSC driven by a count of safe points) is the fallback if it is not.
+Matching blocks by their instruction bytes with relocated fields masked, and
+lifting them to read those fields from guest memory, would remove the address
+dependence altogether (planned; see the handoff).
 
 **(b) TempleOS's own AOT path (rejected as the main route).** `Cmp()` can turn
 HolyC into `.BIN` modules, which could be lifted like the kernel. But producing
