@@ -142,7 +142,7 @@ def main():
             pre = 'B%016X_' % key
             text = re.sub(r'^void L_([0-9A-F]{12})\(CPU \*c\)\n\{', lambda m: 'void %s%X(CPU *c)\n{\n    uint64_t B = g_blob_base;'
                           % (pre, int(m.group(1), 16) - NOMINAL), text, flags=re.M)
-            text = re.sub(r'0x(7F[0-9A-F]{10})ull', lambda m: '(B + 0x%Xull)' % (int(m.group(1), 16) - NOMINAL), text)
+            text = re.sub(r'0x(7F[0-9A-F]{10})(?:ull)?(?![0-9A-Fa-fx])', lambda m: '(B + 0x%Xull)' % (int(m.group(1), 16) - NOMINAL), text)
             text = text.replace('switch (_ind) {', 'switch (_ind - B) {')
             text = re.sub(r'case \(B \+ (0x[0-9A-F]+ull)\):', r'case \1:', text)
             text = text.replace('#include "temple_lift.h"', '#include "temple_lift.h"\nextern uint64_t g_blob_base;')

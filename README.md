@@ -14,7 +14,8 @@ keep running on modern machines.
 ![TempleOS's kernel booting in a window, lifted to C](docs/screenshots/first-light.png)
 
 *The lifted kernel's first screen: KMain's boot text, the CD found through the
-emulated ATAPI drive, and the compiler about to load.*
+emulated ATAPI drive, and the compiler about to load. The same screen from the
+Linux build is in `docs/screenshots/linux-first-light.png`.*
 
 ## Credit
 
@@ -57,11 +58,12 @@ the reasoning is in [docs/survey.md](docs/survey.md).
 |---|---|
 | ISO read (RedSea, TempleOS compression) | done |
 | Kernel lifted and booting: KMain, memory, interrupts, timer, drive detection | done - boot text on screen |
-| `Load("Compiler")`: the HolyC compiler, captured and lifted | in progress |
-| StartOS: Adam, the window manager, the shell (JIT output captured) | next |
+| `Load("Compiler")`: the HolyC compiler, captured and lifted | done - verified byte for byte on Windows and Linux |
+| StartOS: the compiler's output, captured and lifted as it boots | in progress - compiling the kernel and compiler headers, lifted |
+| Adam, the window manager, the shell | next |
 | Keyboard, mouse, editor, a demo or game from the disc | planned |
 | Sound (PC speaker) | planned (muted for now) |
-| Builds | Windows (MSVC, Visual Studio 2022); Linux (gcc) and macOS (clang) planned through CMake |
+| Builds | Windows (MSVC, Visual Studio 2022) and Linux (gcc, tested on Debian under WSL); macOS through the same CMake, not yet built |
 
 ## Getting started
 

@@ -132,14 +132,21 @@ covers, stop, name it, and record it:
   address - `Compiler.BIN`): the module's bytes as they are in memory,
   relocated and linked (`work/jit/mod_<addr>.bin`). It is verified byte for
   byte (FNV-1a) the first time it is entered on later runs;
-- inside a code-heap block (found from TempleOS's own heap header,
-  `CMemUsed {hc, size}` with the heap control's `HcSV` signature): compiler
-  output. Lifted blocks are keyed by (address, content hash); the first time
-  lifted code reaches a block its hash picks the variant and activates its
-  entry points. A hooked `_FREE` deactivates a block's entries, so different
-  code later at the same address never reaches stale lifted code. A hooked
-  `COCCompile` remembers every block compiled, so one stop captures all the
-  functions compiled so far, not just the one that was called;
+- inside a code-heap block (found from the `COCCompile` hook's record, else
+  from TempleOS's own heap header, `CMemUsed {hc, size}` with the heap
+  control's `HcSV` signature): compiler output. The compiler makes the same
+  code at many addresses (a constant expression is compiled, called once and
+  freed) and with different constants and globals, so a block is lifted at a
+  nominal base with its own addresses written as `B + offset`, and with its
+  immediates, 32-bit displacements and call targets read from the block
+  itself at run time (`lift64_sys` `dyn_imm`). It is keyed by an FNV-1a hash of
+  its bytes with exactly those fields masked. The first time lifted code
+  reaches a block, the runtime hashes it with each candidate's mask, and a
+  match activates that lifted body's entry points at this address. A hooked
+  `_FREE` deactivates them, so different code later at the same address never
+  reaches stale lifted code; the hooked `COCCompile` remembers every block it
+  produced (and its exact size, so heap slack never enters the hash), so one
+  stop captures all the functions compiled so far, not just the one called;
 - anything else is new code: the run stops and says so.
 
 Call sites a loader patches later (imports of symbols defined after a module
@@ -147,16 +154,14 @@ loads; in compiler output, every rel32 call) are lifted to read their target
 from guest memory at run time, so code lifted before its imports resolved
 still calls the right function afterwards.
 
-The cost is rounds: each new top-level statement StartOS compiles and runs is
-a new block, so building the cache takes many lift-build-run rounds
-(`tools/capture.py` automates them). It also depends on the boot laying out
-the heap the same way each time. Tasks switch only cooperatively during boot
-(`IRQ_TIMER` re-enters the scheduler but resumes the same task while it is
-ready), which keeps the layout stable in practice; a virtual clock (PIT, HPET
-and TSC driven by a count of safe points) is the fallback if it is not.
-Matching blocks by their instruction bytes with relocated fields masked, and
-lifting them to read those fields from guest memory, would remove the address
-dependence altogether (planned; see the handoff).
+The cost is rounds: each statement shape StartOS compiles and runs that was
+never seen is a new block, so building the cache takes lift-build-run rounds
+(`tools/capture.py` automates them). Because blocks match by masked content,
+not address, the cache does not depend on the heap layout, and it carries over
+to later sessions and to code the user runs, as long as that code's shape was
+seen before. Modules (`Compiler.BIN`) are still matched by address and full
+content; the boot lays the heap out the same way each time (and on each host:
+the module captured on Windows verifies byte for byte on Linux).
 
 **(b) TempleOS's own AOT path (rejected as the main route).** `Cmp()` can turn
 HolyC into `.BIN` modules, which could be lifted like the kernel. But producing
@@ -191,13 +196,39 @@ run time - it is captured exactly like JIT output) and every JIT block.
 
 State, newest first. Keep this current.
 
-- **2026-11-19** - Repo created. ISO layout, RedSea and the LZW expander done in
-  Python. Kernel relocation, function discovery (703+ functions), lift64_sys and
-  the based/system cpu64.h on pcrecomp branch `temple`
-  (`G:/recomp/pc/pcrecomp-temple`). Runtime: memory, devices, interrupts, task
-  contexts, SDL2 presenter with its own PNG writer, boot HLE of KStart16/32.
-  The lifted kernel boots through KMain to interrupt delivery; the seed loop
-  (`tools/iterate.sh`) is filling in functions reached only through pointers.
-- Next: first light (KMain's raw "TempleOS V5.03" text in the window), then the
-  CD found by the ATAPI model, `Load("Compiler")`, and the JIT cache (virtual
-  clock, COCCompile hook, block capture and lifting).
+- **2026-11-19 (end of first session)** - Where it stands:
+  - The lifted kernel boots on Windows (MSVC) and Linux (gcc, WSL Debian) to
+    its boot screen (`docs/screenshots/first-light.png`,
+    `linux-first-light.png`): memory, interrupts, the 1 kHz timer, the boot CD
+    found through the ATAPI model, the RAM drive, and "Loading Compiler".
+  - `Compiler.BIN` is captured from memory, lifted (~280 functions) and
+    verified byte for byte before use; it lexes, parses and compiles StartOS.
+  - StartOS's compiler output runs lifted. `tools/capture.py` was at round 10+
+    of building the cache, with ~80 distinct lifted blocks, still inside the
+    `#include`s of KernelA.HH/CompilerA.HH (no new failure class in those
+    rounds; each round is ~1 minute: lift, incremental MSVC build, hidden run).
+  - Discovery lessons, each a real bug found: HolyC switch tables (`MOVSX
+    r,[idx+T]; ADD r32,base; JMP r`) bounded or not (`switch [x]`); arms are
+    never trusted (decoded after certain code, depth-first per arm, dropped if
+    they overlap a real instruction); `jae`/`jb` bounds are N, `ja`/`jbe` N+1;
+    only reached instructions are lifted (tables sit between arms).
+  - Boot details that mattered: KStart16 must set `SYS_BOOT_PATCH_TABLE_BASE`
+    (LoadKernel reads the exports from it); kernel self-imports are resolved
+    statically, imports of later modules read their rel32 at run time.
+- **Next**, in order:
+  1. Run `python tools/capture.py work/TempleOS.ISO` until StartOS completes
+     (Adam, the window manager task, the registry, MakeHome) and the Adam
+     window appears; take screenshots. Expect new stop classes there: asm
+     blocks in Adam (`CmpFixUpJITAsm` output is not seen by the COCCompile
+     hook - its blocks are hashed over the heap size, so add a hook or a size
+     from `CAOT`), `rcl`/`rcr` (lifter TODOs), `FXSAVE` per task, the window
+     manager's task switching (exercise `tasks.c`), and VGA plane updates
+     (`GrUpdateVGAGraphics`; `vga_planes_latch` is written for it, untested).
+  2. Keyboard: `--keys "Dir;\n" 30` drives the shell in hidden runs
+     (`present_type`); the i8042 model answers the driver's init.
+  3. A demo or game from the disc, then the mouse (PS/2 packets are wired).
+  4. Sound: the PC speaker gate is recorded but muted; add an SDL audio square
+     wave behind a flag (tests stay muted).
+  5. macOS build (CMake + Homebrew SDL2; `cpu64.h` is portable, `tasks.c` uses
+     SDL threads, no inline asm in the runtime).
+  6. Upstream lift64_sys/cpu64.h to pcrecomp main (branch `temple`).

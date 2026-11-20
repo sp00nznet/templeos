@@ -126,6 +126,25 @@ was made from. Call sites that a loader patches later (imports of symbols
 defined after the module loads) are lifted to read their target from guest
 memory at run time.
 
+Compiler output is the same code at many addresses, with different constants:
+
+      compiled at 0x2EC81878          compiled at 0x2EB4E898
+      ┌───────────────────────┐       ┌───────────────────────┐
+      │ 6A 00     push 0      │       │ 6A 05     push 5      │   same bytes, except
+      │ E8 xx xx  call Option │       │ E8 yy yy  call Option │   the masked fields
+      │ C3        ret         │       │ C3        ret         │
+      └───────────────────────┘       └───────────────────────┘
+                   \                        /
+                    one lifted body, keyed by the bytes with the
+                    fields masked:  push64(c, rd8(B + 1));
+                                    target = B + 9 + rd32(B + 5) ...
+
+so it is lifted at a nominal base with its own addresses as `B + offset`
+(`B` is where this copy lives, set by the dispatcher) and its immediates,
+displacements and call targets read from the block. The runtime hashes a block
+with each candidate's mask when lifted code first reaches it; a match activates
+that body at this address, and the guest's `Free` of the block deactivates it.
+
 ## 5. The machine
 
 | Device | Model |
