@@ -27,6 +27,10 @@ void vga_planes_latch(int new_mask)
     const uint8_t *v = gptr(0xA0000);
     for (int p = 0; p < 4; p++)
         if (cur_mask & (1 << p)) memcpy(planes[p], v, PLANE);
+    /* GrUpdateLine64 writes only the qwords that changed, so the bytes it
+     * skips must still hold the newly selected plane: swap that plane in. */
+    for (int p = 0; p < 4; p++)
+        if (new_mask & (1 << p)) { memcpy((uint8_t *)v, planes[p], PLANE); break; }
     cur_mask = new_mask;
 }
 
