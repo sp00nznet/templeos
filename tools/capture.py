@@ -28,6 +28,8 @@ def main():
     ap.add_argument('--rounds', type=int, default=60)
     ap.add_argument('--secs', type=float, default=20)
     ap.add_argument('--build', default=os.path.join(ROOT, 'build'))
+    ap.add_argument('--keys', nargs=2, action='append', default=[], metavar=('TEXT', 'SECS'),
+                    help='type TEXT at SECS (repeatable), to capture what commands compile')
     a = ap.parse_args()
     env = dict(os.environ, SDL_VIDEODRIVER='dummy', SDL_AUDIODRIVER='dummy')
     os.makedirs(os.path.join(ROOT, 'work'), exist_ok=True)
@@ -41,7 +43,8 @@ def main():
         exe = exe_path(a.build)
         shot = os.path.join(ROOT, 'work', 'capture.png')
         try:
-            p = subprocess.run([exe, '--hidden', '--shot', shot, str(a.secs), '--quit', str(a.secs + 0.5), a.iso],
+            keys = [x for k in a.keys for x in ('--keys', k[0].replace('\\n', '\n'), k[1])]
+            p = subprocess.run([exe, '--hidden'] + keys + ['--shot', shot, str(a.secs), '--quit', str(a.secs + 0.5), a.iso],
                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                timeout=a.secs + 120)
             out, rc = p.stdout, p.returncode
