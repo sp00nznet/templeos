@@ -122,10 +122,11 @@ static int boot(const uint8_t *iso, size_t iso_n)
 int main(int argc, char **argv)
 {
     const char *iso_path = NULL, *shot = NULL;
-    int hidden = 0; double shot_at = 10, quit_at = 0;
+    int hidden = 0, sound = 0; double shot_at = 10, quit_at = 0;
     const char *keys[8]; double keys_at[8]; int nkeys = 0, keys_done = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--hidden")) hidden = 1;
+        else if (!strcmp(argv[i], "--sound")) sound = 1;
         else if (!strcmp(argv[i], "--trace")) g_trace++;
         else if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shot = argv[++i]; shot_at = atof(argv[++i]); }
         else if (!strcmp(argv[i], "--quit") && i + 1 < argc) quit_at = atof(argv[++i]);
@@ -133,7 +134,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--work") && i + 1 < argc) g_work = argv[++i];
         else iso_path = argv[i];
     }
-    if (!iso_path) { fprintf(stderr, "usage: templeos [--hidden] [--shot out.png SECONDS] [--quit SECONDS] TempleOS.ISO\n"); return 2; }
+    if (!iso_path) { fprintf(stderr, "usage: templeos [--hidden] [--sound] [--shot out.png SECONDS] [--quit SECONDS] TempleOS.ISO\n"); return 2; }
     size_t iso_n; uint8_t *iso = read_file(iso_path, &iso_n);
     if (!iso || !iso_open(iso_path)) { fprintf(stderr, "cannot read %s\n", iso_path); return 2; }
 
@@ -143,6 +144,7 @@ int main(int argc, char **argv)
     machine_init();
     if (!boot(iso, iso_n)) return 3;
     if (!present_init(hidden)) return 4;
+    if (sound && !hidden) { void sound_init(void); sound_init(); }
     devices_init();
     tasks_start(&g_cpu, K_KSTART64);
 

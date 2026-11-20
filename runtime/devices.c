@@ -65,6 +65,13 @@ static void pic_out(int n, int port, uint8_t v)
 static uint32_t pit_reload = 65536, pit_latch_lo, pit_access;
 static uint64_t pit_t0, pit_ticks;
 static uint8_t port61;
+/* PC speaker: PIT channel 2's divisor and the port 0x61 gate (bits 0 and 1). */
+static uint32_t pit2_reload = 65536, pit2_access;
+volatile uint32_t g_speaker_hz;   /* 0 = silent; read by the audio callback */
+static void speaker_update(void)
+{
+    g_speaker_hz = (port61 & 3) == 3 ? 1193182u / pit2_reload : 0;
+}
 
 static void pit_tick(void)
 {
@@ -353,12 +360,14 @@ void dev_out(uint32_t port, uint64_t v, int size)
     switch (port) {
     case 0x20: case 0x21: pic_out(0, port & 1, (uint8_t)v); return;
     case 0xA0: case 0xA1: pic_out(1, port & 1, (uint8_t)v); return;
-    case 0x43: pit_access = 0; return;
+    case 0x43: if ((v >> 6) == 2) pit2_access = 0; else pit_access = 0; return;
+    case 0x42: if (pit2_access++ & 1) { pit2_reload = (pit2_reload & 0xFF) | ((uint32_t)(v & 0xFF) << 8); if (!pit2_reload) pit2_reload = 65536; speaker_update(); }
+               else pit2_reload = (uint32_t)(v & 0xFF); return;
     case 0x40: if (pit_access++ & 1) { pit_reload = (pit_reload & 0xFF) | ((uint32_t)(v & 0xFF) << 8); if (!pit_reload) pit_reload = 65536; pit_t0 = 0; pit_ticks = 0; }
                else pit_reload = (uint32_t)(v & 0xFF); return;
     case 0x60: kbd_cmd((uint8_t)v); kbc_irq(); return;
     case 0x64: kbc_ctl((uint8_t)v); kbc_irq(); return;
-    case 0x61: port61 = (uint8_t)v; return;                /* PC speaker gate: muted */
+    case 0x61: port61 = (uint8_t)v; speaker_update(); return;   /* PC speaker gate */
     case 0x70: cmos_idx = (uint8_t)v; return;
     case 0xCF8: pci_addr = (uint32_t)v; return;
     case 0x3C4: case 0x3C5: case 0x3CE: case 0x3CF: case 0x3C8: case 0x3C9:

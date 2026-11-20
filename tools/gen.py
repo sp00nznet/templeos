@@ -128,12 +128,9 @@ def main():
             # Compiler output: one file, immediates and displacements read from
             # the block itself (dyn_imm), keyed by its bytes with exactly those
             # fields masked - the key the runtime computes to find it.
-            tmp = os.path.join(gen, r['tag'] + '.tmp')
-            lift64_sys.lift_raw(rimg, base, funcs, tmp, header='temple_lift.h', dyn_all=True, dyn_imm=True)
-            mask = sorted((a - NOMINAL, n) for a, n in lift64_sys.lift_raw.dyn_fields)
+            text, dynf = cached_lift(lift64_sys, rimg, base, funcs, dict(dyn_all=True, dyn_imm=True))
+            mask = sorted((a - NOMINAL, n) for a, n in dynf)
             key = fnv(masked(rimg, mask))
-            text = open(tmp).read()
-            os.remove(tmp)
             if key in blob_keys:
                 r['dup'] = True
                 continue
@@ -154,10 +151,7 @@ def main():
             buckets.setdefault((a - base) // 0x4000, {})[a] = funcs[a]
         for b, part in (sorted(buckets.items()) if 'blob' not in r else ()):
             fn = '%s_%02d.c' % (r['tag'], b)
-            tmp = os.path.join(gen, fn + '.tmp')
-            lift64_sys.lift_raw(rimg, base, part, tmp, header='temple_lift.h', dyn_calls=dyn)
-            write_if_changed(os.path.join(gen, fn), open(tmp).read())
-            os.remove(tmp)
+            write_if_changed(os.path.join(gen, fn), cached_lift(lift64_sys, rimg, base, part, dict(dyn_calls=dyn))[0])
             files.append('src/gen/' + fn)
         if 'blob' in r:
             r['funcs'] = sorted(funcs)
@@ -227,6 +221,32 @@ def module_symbols(mimg, mbase):
             if name: last = name
             imports.append((et, i, last))
     return ex, imports, mains
+
+
+def _norm(v):
+    if isinstance(v, (set, frozenset)): return sorted(v)
+    if isinstance(v, dict): return sorted((k, _norm(x)) for k, x in v.items())
+    if isinstance(v, (list, tuple)): return [_norm(x) for x in v]
+    return v
+
+
+def cached_lift(lifter, img, base, funcs, kw):
+    """lift_raw memoised in work/liftcache, keyed by bytes, functions, options and the lifter's source."""
+    import hashlib, pickle
+    if not hasattr(cached_lift, 'src'):
+        d = os.path.dirname(lifter.__file__)
+        cached_lift.src = b''.join(open(os.path.join(d, f), 'rb').read() for f in sorted(os.listdir(d)) if f.endswith('.py'))
+    h = hashlib.sha1(cached_lift.src + img + repr((base, _norm(funcs), _norm(kw))).encode()).hexdigest()
+    cf = os.path.join(ROOT, 'work', 'liftcache', h + '.pkl')
+    if os.path.exists(cf):
+        return pickle.load(open(cf, 'rb'))
+    os.makedirs(os.path.dirname(cf), exist_ok=True)
+    tmp = cf + '.%d.tmp' % os.getpid()
+    lifter.lift_raw(img, base, funcs, tmp, header='temple_lift.h', **kw)
+    res = (open(tmp).read(), list(getattr(lifter.lift_raw, 'dyn_fields', [])))
+    os.remove(tmp)
+    pickle.dump(res, open(cf + '.part', 'wb')); os.replace(cf + '.part', cf)
+    return res
 
 
 def masked(img, mask):

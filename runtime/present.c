@@ -65,6 +65,32 @@ int present_init(int hidden)
     return 1;
 }
 
+/* --sound: the PC speaker as a square wave. Off by default; tests stay muted. */
+extern volatile uint32_t g_speaker_hz;
+static void audio_cb(void *u, Uint8 *out, int n)
+{
+    static double ph;
+    int16_t *o = (int16_t *)out;
+    uint32_t hz = g_speaker_hz;
+    (void)u;
+    for (int i = 0; i < n / 2; i++) {
+        o[i] = (hz && hz < 20000) ? (ph < 0.5 ? 3000 : -3000) : 0;
+        ph += hz / 44100.0;
+        ph -= (int)ph;
+    }
+}
+
+void sound_init(void)
+{
+    SDL_AudioSpec want = {0};
+    want.freq = 44100; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 512;
+    want.callback = audio_cb;
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) { fprintf(stderr, "audio: %s\n", SDL_GetError()); return; }
+    SDL_AudioDeviceID d = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
+    if (d) SDL_PauseAudioDevice(d, 0);
+    else fprintf(stderr, "audio: %s\n", SDL_GetError());
+}
+
 void present_frame(void)
 {
     compose();
