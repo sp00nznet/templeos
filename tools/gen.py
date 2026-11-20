@@ -20,6 +20,7 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 
 BASE = 0x7C00
 CHUNK = 80
+NOMINAL = 0x7F0000000000      # where compiler output is lifted; its own addresses become B + offset
 HOOKS = {'_YIELD': 'hook_yield', '_FREE': 'hook_free', 'COCCompile': 'hook_coccompile'}
 
 
@@ -94,16 +95,24 @@ def main():
                 regions.append(dict(tag='mod_%X' % mbase, base=mbase, img=mimg, ex=mex, imports=mimp,
                                     extra=set(mains), fnv=fnv(mimg)))
             elif len(p) == 4 and p[0] == 'blob':
+                # Compiler output is keyed by its bytes alone: the same code at
+                # another address is the same lifted code. It is lifted at a
+                # nominal base, and its own addresses become B + offset, with B
+                # (where this copy lives) supplied by the dispatcher.
                 bbase, bsize, bfnv = int(p[1], 16), int(p[2], 16), int(p[3], 16)
-                bimg = open(os.path.join(ROOT, 'work', 'jit', 'blob_%X_%016X.bin' % (bbase, bfnv)), 'rb').read()
-                if any(r.get('blob') == (bbase, bfnv) for r in regions):
+                offs = {a - bbase for a in seeds_all if bbase <= a < bbase + bsize}
+                old = next((r for r in regions if r.get('blob') == bfnv), None)
+                if old:
+                    old['extra'] |= {NOMINAL + o for o in offs}
                     continue
-                regions.append(dict(tag='blob_%X_%08X' % (bbase, bfnv & 0xFFFFFFFF), base=bbase, img=bimg, ex={},
-                                    imports=[], extra={bbase}, fnv=None, blob=(bbase, bfnv)))
+                bimg = open(os.path.join(ROOT, 'work', 'jit', 'blob_%X_%016X.bin' % (bbase, bfnv)), 'rb').read()
+                regions.append(dict(tag='blob_%016X' % bfnv, base=NOMINAL, img=bimg, ex={},
+                                    imports=[], extra={NOMINAL} | {NOMINAL + o for o in offs}, fnv=None, blob=bfnv))
 
     gen = os.path.join(ROOT, 'src', 'gen')
     os.makedirs(gen, exist_ok=True)
     allfuncs, allsyms, files = {}, [], []
+    blob_keys = set()
     for r in regions:
         base, rimg, rex = r['base'], r['img'], r['ex']
         mb = base + tosbin.HDR
@@ -115,19 +124,39 @@ def main():
                 seeds.add(v)
         seeds |= {a for a in seeds_all if base <= a < base + len(rimg)}
         funcs, bad = discover.discover(rimg, base, seeds, dyn, names)
+        if 'blob' in r:
+            # Compiler output: one file, immediates and displacements read from
+            # the block itself (dyn_imm), keyed by its bytes with exactly those
+            # fields masked - the key the runtime computes to find it.
+            tmp = os.path.join(gen, r['tag'] + '.tmp')
+            lift64_sys.lift_raw(rimg, base, funcs, tmp, header='temple_lift.h', dyn_all=True, dyn_imm=True)
+            mask = sorted((a - NOMINAL, n) for a, n in lift64_sys.lift_raw.dyn_fields)
+            key = fnv(masked(rimg, mask))
+            text = open(tmp).read()
+            os.remove(tmp)
+            if key in blob_keys:
+                r['dup'] = True
+                continue
+            blob_keys.add(key)
+            r['key'], r['mask'] = key, mask
+            pre = 'B%016X_' % key
+            text = re.sub(r'^void L_([0-9A-F]{12})\(CPU \*c\)\n\{', lambda m: 'void %s%X(CPU *c)\n{\n    uint64_t B = g_blob_base;'
+                          % (pre, int(m.group(1), 16) - NOMINAL), text, flags=re.M)
+            text = re.sub(r'0x(7F[0-9A-F]{10})ull', lambda m: '(B + 0x%Xull)' % (int(m.group(1), 16) - NOMINAL), text)
+            text = text.replace('switch (_ind) {', 'switch (_ind - B) {')
+            text = re.sub(r'case \(B \+ (0x[0-9A-F]+ull)\):', r'case \1:', text)
+            text = text.replace('#include "temple_lift.h"', '#include "temple_lift.h"\nextern uint64_t g_blob_base;')
+            fn = 'blob_%016X.c' % key
+            write_if_changed(os.path.join(gen, fn), text)
+            files.append('src/gen/' + fn)
         buckets = {}
         for a in funcs:
             buckets.setdefault((a - base) // 0x4000, {})[a] = funcs[a]
-        for b, part in sorted(buckets.items()):
+        for b, part in (sorted(buckets.items()) if 'blob' not in r else ()):
             fn = '%s_%02d.c' % (r['tag'], b)
             tmp = os.path.join(gen, fn + '.tmp')
-            lift64_sys.lift_raw(rimg, base, part, tmp, header='temple_lift.h', dyn_calls=dyn,
-                                dyn_all='blob' in r)
-            text = open(tmp).read()
-            if 'blob' in r:     # variants share addresses: give their functions their own names
-                pre = 'B%08X_' % (r['blob'][1] & 0xFFFFFFFF)
-                text = re.sub(r'^void L_([0-9A-F]{12})\(CPU \*c\)', 'void ' + pre + r'\1(CPU *c)', text, flags=re.M)
-            write_if_changed(os.path.join(gen, fn), text)
+            lift64_sys.lift_raw(rimg, base, part, tmp, header='temple_lift.h', dyn_calls=dyn)
+            write_if_changed(os.path.join(gen, fn), open(tmp).read())
             os.remove(tmp)
             files.append('src/gen/' + fn)
         if 'blob' in r:
@@ -151,17 +180,18 @@ def main():
     for name in sorted(HOOKS):
         out.append('lifted_fn g_body_%s = %s;\n' % (name, 'L_%012X' % allex[name] if allex.get(name) in allfuncs else '0'))
     hooked = {allex[k]: v for k, v in HOOKS.items() if allex.get(k) in allfuncs}
-    blobs = [r for r in regions if 'blob' in r]
-    for i, r in enumerate(blobs):
-        pre = 'B%08X_' % (r['blob'][1] & 0xFFFFFFFF)
-        out += ['void %s%012X(CPU *c);\n' % (pre, a) for a in r['funcs']]
-        out.append('static const struct { uint64_t a; lifted_fn fn; } be_%d[] = {\n' % i)
-        out += ['  {0x%Xull, %s%012X},\n' % (a, pre, a) for a in r['funcs']]
-        out.append('};\n')
-    out.append('typedef struct { uint64_t addr, size, fnv; const void *ents; size_t nents; } Blob;\nconst Blob g_blobs[] = {\n')
-    out += ['  {0x%Xull, 0x%Xull, 0x%016Xull, be_%d, %d},\n' % (r['base'], len(r['img']), r['blob'][1], i, len(r['funcs']))
+    blobs = [r for r in regions if 'blob' in r and not r.get('dup')]
+    for i, r in enumerate(blobs):       # entry points and masked fields as offsets into the block
+        pre = 'B%016X_' % r['key']
+        out += ['void %s%X(CPU *c);' % (pre, a - NOMINAL) + chr(10) for a in r['funcs']]
+        out.append('static const struct { uint64_t off; lifted_fn fn; } be_%d[] = {' % i + chr(10))
+        out += ['  {0x%Xull, %s%X},' % (a - NOMINAL, pre, a - NOMINAL) + chr(10) for a in r['funcs']]
+        out.append('};' + chr(10))
+        out.append('static const uint32_t bm_%d[] = {%s0};' % (i, ''.join('%d, %d, ' % f for f in r['mask'])) + chr(10))
+    out.append('typedef struct { uint64_t size, key; const void *ents; size_t nents; const uint32_t *mask; size_t nmask; } Blob;' + chr(10) + 'const Blob g_blobs[] = {' + chr(10))
+    out += ['  {0x%Xull, 0x%016Xull, be_%d, %d, bm_%d, %d},' % (len(r['img']), r['key'], i, len(r['funcs']), i, len(r['mask'])) + chr(10)
             for i, r in enumerate(blobs)]
-    out.append('  {0, 0, 0, 0, 0}\n};\nconst size_t g_nblobs = %d;\n\n' % len(blobs))
+    out.append('  {0, 0, 0, 0, 0, 0}' + chr(10) + '};' + chr(10) + 'const size_t g_nblobs = %d;' % len(blobs) + chr(10) + chr(10))
     out.append('typedef struct { uint64_t a; void (*fn)(CPU *); } Ent;\nconst Ent g_lifted[] = {\n')
     out += ['  {0x%Xull, %s},\n' % (a, hooked.get(a, 'L_%012X' % a)) for a in addrs]
     out.append('};\nconst size_t g_nlifted = %d;\n\n' % len(addrs))
@@ -197,6 +227,14 @@ def module_symbols(mimg, mbase):
             if name: last = name
             imports.append((et, i, last))
     return ex, imports, mains
+
+
+def masked(img, mask):
+    """The bytes with the fields lifted as run-time reads set to zero."""
+    b = bytearray(img)
+    for off, n in mask:
+        b[off:off + n] = bytes(n)
+    return bytes(b)
 
 
 def write_if_changed(path, text):
