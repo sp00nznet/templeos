@@ -132,7 +132,7 @@ def main():
             # the block itself (dyn_imm), keyed by its bytes with exactly those
             # fields masked - the key the runtime computes to find it.
             text, dynf = cached_lift(lift64_sys, rimg, base, funcs, dict(dyn_all=True, dyn_imm=True))
-            mask = sorted((a - NOMINAL, n) for a, n in dynf)
+            mask = blob_mask(rimg, funcs, dynf)
             key = fnv(masked(rimg, mask))
             if key in blob_keys:
                 r['dup'] = True
@@ -250,6 +250,38 @@ def cached_lift(lifter, img, base, funcs, kw):
     os.remove(tmp)
     pickle.dump(res, open(cf + '.part', 'wb')); os.replace(cf + '.part', cf)
     return res
+
+
+def blob_mask(img, funcs, dynf):
+    """Bytes a block's key ignores: the fields read at run time, and every byte
+    outside the instructions that were lifted (never reached, so they cannot
+    change what the lifted code does; data and unreached code may hold heap
+    addresses that differ between hosts). Sorted, non-overlapping (off, n)."""
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    keep = bytearray(len(img))          # 1 = byte the key covers
+    for fa, f in funcs.items():
+        if f[2] is None:                # opaque: lifted linearly over its whole range
+            keep[fa - NOMINAL:fa - NOMINAL + f[0]] = b'\x01' * f[0]
+            continue
+        for a in f[2]:
+            o = a - NOMINAL
+            ins = next(md.disasm(img[o:o + 16], a), None)
+            if ins:
+                keep[o:o + ins.size] = b'\x01' * ins.size
+    for a, n in dynf:
+        o = a - NOMINAL
+        keep[o:o + n] = bytes(n)
+    mask, o = [], 0
+    while o < len(img):
+        if keep[o]:
+            o += 1
+            continue
+        s = o
+        while o < len(img) and not keep[o]:
+            o += 1
+        mask.append((s, o - s))
+    return mask
 
 
 def masked(img, mask):

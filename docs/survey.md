@@ -196,6 +196,38 @@ run time - it is captured exactly like JIT output) and every JIT block.
 
 State, newest first. Keep this current.
 
+- **2026-11-19 (second session)** - Where it stands:
+  - StartOS completes: the Adam desktop comes up in its 16 colours (about
+    100 s after start in a hidden run), the boot questions are answered from
+    the keyboard, and commands typed at the shell run (`Dir;`,
+    `F64 x=6*7;x/4;` -> 10.5). Squirt from `Demo/Games` runs and the pointer
+    follows scripted PS/2 packets. Screenshots and `hero.gif` in
+    `docs/screenshots/`.
+  - Capture: 65 more rounds with `--secs 120` (20 s ran out mid-compile),
+    then a few with `--keys` scripts; about 1,000 distinct lifted blocks.
+    None of the expected stop classes appeared in StartOS: no asm-block
+    misses, no new instructions besides RCL/RCR (added to lift64 anyway),
+    and task switching held.
+  - Fixes: VGA plane memory is swapped in when the map mask changes
+    (`GrUpdateLine64` writes only changed qwords); a string the compiler put
+    in the code heap is no longer lifted as a block; a block's key now
+    ignores every byte outside its lifted instructions (unreached code held
+    heap addresses that differ between Windows and Linux).
+  - Faster loop: `gen.py` memoises lifts in `work/liftcache` (keyed by bytes,
+    functions, options and the lifter's source); a round is ~25 s.
+  - New options: `--sound` (PC speaker square wave; never in hidden runs),
+    `--frames DIR START EVERY`, `--keys mouse:DX,DY,BUTTONS`;
+    `capture.py --keys TEXT SECS` (repeatable).
+  - Setup scripts clone pcrecomp's `temple` branch when it is missing; that
+    works once the branch is published.
+- **Next**, in order:
+  - Linux (WSL Debian gcc) runs the same script to Squirt with the cache
+     captured on Windows (`docs/screenshots/linux-squirt.png`).
+  1. More programs from the disc (`Apps/`, other `Demo/Games`), each by a
+     `capture.py --keys` run; the editor (`Ed`), the help system.
+  2. An end-to-end Setup test from a clean clone once the pcrecomp branch is
+     published; macOS build; upstream lift64_sys/cpu64.h to pcrecomp main.
+
 - **2026-11-19 (end of first session)** - Where it stands:
   - The lifted kernel boots on Windows (MSVC) and Linux (gcc, WSL Debian) to
     its boot screen (`docs/screenshots/first-light.png`,
