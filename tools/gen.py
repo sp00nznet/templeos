@@ -124,6 +124,9 @@ def main():
                 seeds.add(v)
         seeds |= {a for a in seeds_all if base <= a < base + len(rimg)}
         funcs, bad = discover.discover(rimg, base, seeds, dyn, names)
+        if 'blob' in r and not funcs:
+            r['dup'] = True     # data the compiler put in the code heap (strings): nothing to lift
+            continue
         if 'blob' in r:
             # Compiler output: one file, immediates and displacements read from
             # the block itself (dyn_imm), keyed by its bytes with exactly those

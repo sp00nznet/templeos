@@ -11,10 +11,13 @@ more than a decade. This project takes the system exactly as he shipped it in
 its final release, V5.03, and translates its machine code to C so that it can
 keep running on modern machines.
 
+![TempleOS V5.03 running lifted to C: the boot questions, a HolyC expression and Dir at the shell, then Squirt](docs/screenshots/hero.gif)
+
 ![The Adam desktop of TempleOS V5.03, running lifted to C](docs/screenshots/desktop.png)
 
 *The Adam desktop after StartOS: the boot questions answered from the keyboard
-and `Dir;` run at the shell. Every instruction on screen is TempleOS's own code,
+a HolyC expression (`F64 x=6*7;x/4;`) and `Dir;` run at
+the shell. Every instruction on screen is TempleOS's own code,
 translated ahead of time; the boot screen it starts from is in
 `docs/screenshots/first-light.png`.*
 
