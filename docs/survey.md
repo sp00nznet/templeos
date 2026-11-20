@@ -204,7 +204,7 @@ State, newest first. Keep this current.
   - `Compiler.BIN` is captured from memory, lifted (~280 functions) and
     verified byte for byte before use; it lexes, parses and compiles StartOS.
   - StartOS's compiler output runs lifted. `tools/capture.py` was stopped at round 21
-    of building the cache, with ~120 distinct lifted blocks, still inside the
+    of building the cache, with 318 distinct lifted blocks, still inside the
     `#include`s of KernelA.HH/CompilerA.HH (no new failure class in those
     rounds; each round is ~1 minute: lift, incremental MSVC build, hidden run).
   - Discovery lessons, each a real bug found: HolyC switch tables (`MOVSX
