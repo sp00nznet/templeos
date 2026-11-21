@@ -1,0 +1,36 @@
+{
+  "title": "TempleOS",
+  "repo": "sp00nznet/templeos",
+  "accent": "#0000aa",
+  "note": {
+    "windows": "Point it at the folder holding your own TempleOS.ISO (V5.03; public domain, from templeos.org). It needs Python 3.10 or newer, CMake, and Visual Studio 2022 or its Build Tools with Desktop development with C++; the setup checks for them but does not install them."
+  },
+  "game": {
+    "name": "TempleOS (TempleOS.ISO)",
+    "files": [
+      "*.iso"
+    ],
+    "get": "https://templeos.org/"
+  },
+  "sources": [
+    {
+      "repo": "sp00nznet/pcrecomp",
+      "ref": "temple",
+      "dir": "pcrecomp-temple"
+    }
+  ],
+  "setup": {
+    "windows": [
+      "powershell",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "tools\\setup.ps1",
+      "-Yes",
+      "-Iso",
+      "{game}"
+    ]
+  },
+  "play": "TempleOS.cmd"
+}

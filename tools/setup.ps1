@@ -90,6 +90,8 @@ if ($Toolchain -and (Test-Path $Toolchain)) {
 Step 2 "TempleOS.ISO"
 $IsoDst = Join-Path $Work 'TempleOS.ISO'
 if (-not (Done $IsoDst)) {
+  # a folder holding the .iso (what the launcher passes) is that .iso
+  if ($Iso -and (Test-Path -LiteralPath $Iso -PathType Container)) { $i = @(Get-ChildItem -LiteralPath $Iso -Filter *.iso -File)[0]; if ($i) { $Iso = $i.FullName } }
   while (-not $Iso -or -not (Test-Path -LiteralPath $Iso)) { $Iso = (Read-Host "Path to TempleOS.ISO").Trim('"') }
   New-Item -ItemType Directory -Force $Work | Out-Null
   Copy-Item -LiteralPath $Iso $IsoDst
